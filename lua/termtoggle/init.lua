@@ -1,94 +1,103 @@
-local TERM_TOGGLE_WIN_ID = nil
-local TERM_TOGGLE_BUF_ID = nil
-local TERM_TOGGLE_HEIGHT = 20
-local TERM_IS_ON = nil
-local TERM_BG=""
+local M = {}
 
-local function setup(t)
-    if t ~= nil and t.bg ~= nil then
-        TERM_BG = t.bg
-    end
-end
+local state = { win = nil, buf = nil, started = false }
 
-local function close_win()
-    if TERM_TOGGLE_WIN_ID ~= nil then
-        vim.api.nvim_win_close(TERM_TOGGLE_WIN_ID, true)
-        TERM_TOGGLE_WIN_ID = nil
-    end
-end
-
-local function check()
-    local __current_win__ = vim.api.nvim_get_current_win()
-    if __current_win__ == TERM_TOGGLE_WIN_ID then
-        close_win()
-        TERM_IS_ON = nil
-    end
-end
-
-local function draw_term()
-    local _width = vim.api.nvim_list_uis()[1].width
-    local _height = vim.api.nvim_list_uis()[1].height
-    TERM_TOGGLE_WIN_ID = vim.api.nvim_open_win(TERM_TOGGLE_BUF_ID, true, { relative="editor",
-                 width= _width- 2, height= TERM_TOGGLE_HEIGHT ,
-                 col= 2, row= _height - 2,
-                 border="rounded"})
-    vim.wo.number = false
-    vim.wo.relativenumber = false
-    if TERM_BG ~= "" then
-        vim.api.nvim_win_set_hl_ns(TERM_TOGGLE_WIN_ID, vim.api.nvim_create_namespace("termtoggle"))
-        vim.api.nvim_set_hl(vim.api.nvim_create_namespace("termtoggle"), "Normal", { bg = TERM_BG})
-    end
-end
-
-local function term_toggle()
-    if TERM_TOGGLE_BUF_ID == nil then
-        TERM_TOGGLE_BUF_ID = vim.api.nvim_create_buf(false, true)
-    end
-    if TERM_TOGGLE_WIN_ID == nil then
-        draw_term()
-        if TERM_IS_ON == nil then
-            vim.cmd("term zsh")
-            vim.cmd("set nobuflisted")
-            TERM_TOGGLE_BUF_ID = vim.api.nvim_get_current_buf()
-            TERM_IS_ON = true
-        end
-    else
-        close_win()
-    end
-end
-
-local function on_resize()
-    if TERM_TOGGLE_WIN_ID ~= nil then
-        close_win()
-        draw_term()
-    end
-end
-
-local term_group = vim.api.nvim_create_augroup("github.com/aditya-K2/termtoggle.nvim", {clear = true})
-
-vim.api.nvim_create_autocmd("VimResized", {
-    group = term_group,
-    pattern = "*",
-    callback = on_resize
-})
-
-vim.api.nvim_create_autocmd("TermClose", {
-    group = term_group,
-    pattern = "*",
-    callback = check
-})
-
-vim.api.nvim_create_autocmd("VimLeave", {
-    group = term_group,
-    pattern = "*",
-    callback = function()
-        TERM_TOGGLE_WIN_ID = nil
-    end
-})
-
-vim.api.nvim_set_keymap('t', '<M-m>', '', {silent=true, noremap=true, callback=term_toggle})
-vim.api.nvim_set_keymap("n", '<M-m>', '', {silent=true, noremap=true, callback=term_toggle})
-
-return {
-    setup = setup,
+local defaults = {
+    height = 20,
+    shell = vim.o.shell,
+    border = "rounded",
+    bg = nil,
+    keymap = "<M-m>",
 }
+
+local config = {}
+
+local function valid_win()
+    return state.win and vim.api.nvim_win_is_valid(state.win)
+end
+
+local function valid_buf()
+    return state.buf and vim.api.nvim_buf_is_valid(state.buf)
+end
+
+local function close()
+    if valid_win() then
+        vim.api.nvim_win_close(state.win, true)
+    end
+    state.win = nil
+end
+
+local function open()
+    local ui = vim.api.nvim_list_uis()[1]
+
+    state.win = vim.api.nvim_open_win(state.buf, true, {
+        relative = "editor",
+        width = ui.width - 4,
+        height = config.height,
+        col = 1,
+        row = ui.height - config.height - 4,
+        border = config.border,
+    })
+
+    vim.wo[state.win].number = false
+    vim.wo[state.win].relativenumber = false
+
+    if config.bg then
+        local ns = vim.api.nvim_create_namespace("termtoggle")
+        vim.api.nvim_set_hl(ns, "Normal", { bg = config.bg })
+        vim.api.nvim_win_set_hl_ns(state.win, ns)
+    end
+end
+
+local function toggle()
+    if valid_win() then
+        close()
+        return
+    end
+
+    if not valid_buf() then
+        state.buf = vim.api.nvim_create_buf(false, true)
+        state.started = false
+    end
+
+    open()
+
+    if not state.started then
+        vim.cmd("term " .. config.shell)
+        vim.bo.buflisted = false
+        state.buf = vim.api.nvim_get_current_buf()
+        state.started = true
+    end
+end
+
+function M.setup(opts)
+    config = vim.tbl_deep_extend("force", defaults, opts or {})
+
+    local group = vim.api.nvim_create_augroup("termtoggle", { clear = true })
+
+    vim.api.nvim_create_autocmd("VimResized", {
+        group = group,
+        callback = function()
+            if valid_win() then
+                close()
+                open()
+            end
+        end,
+    })
+
+    vim.api.nvim_create_autocmd("TermClose", {
+        group = group,
+        callback = function()
+            if vim.api.nvim_get_current_win() == state.win then
+                close()
+                state.started = false
+            end
+        end,
+    })
+
+    vim.keymap.set({ "n", "t" }, config.keymap, toggle, { silent = true })
+end
+
+M.toggle = toggle
+
+return M
